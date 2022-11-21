@@ -55,7 +55,7 @@ def get_proxy():
             if anonymity != "透明":
                 break
         except Exception as e:
-            print("获取代理失败", e)
+            print("获取代理失败\n", e)
             sys.exit()
     return proxy_ip, proxy_port
 
@@ -78,13 +78,13 @@ def get_url_from_txt(count, txt='url.txt', add_log='./log/add_log.txt'):
                 url_list.append(url)
 
     except Exception as e:
-        print("[*] 请确认{}的位置是否正确".format(txt), e)
+        print("[*] 请确认{}的位置是否正确\n".format(txt), e)
         sys.exit()
     return url_list
 
 
 def add_targets(txt='url.txt', add_log='./log/add_log.txt'):
-    count = input("[*] 请输入要添加的目标数量(留空则添加txt中全部url)：") or None
+    count = input("[*] 请输入要添加的目标数量(留空则添加{}中全部url)：".format(txt)) or None
     if count != None:
         count = int(count)
     url_list = get_url_from_txt(count, txt, add_log)
@@ -111,7 +111,7 @@ def add_targets(txt='url.txt', add_log='./log/add_log.txt'):
                 flag = True
         except Exception as e:
             flag = False
-            print("[*] 添加目标失败", e)
+            print("[*] 添加目标失败\n", e)
 
     if flag:
         try:
@@ -122,7 +122,7 @@ def add_targets(txt='url.txt', add_log='./log/add_log.txt'):
                         lines = {}
                     f_w.writelines(lines)
         except Exception as e:
-            print("[*] 去除txt中已添加到扫描器的url时出错", e)
+            print("[*] 去除txt中已添加到扫描器的url时出错\n", e)
 
     configuration(target_id_list, profile_id)
     return target_id_list
@@ -178,8 +178,62 @@ def scan_targets(txt='url.txt', add_log='./log/add_log.txt'):
             scan_id = result['scan_id']
             scan_id_list.append(scan_id)
         except Exception as e:
-            print("[*] 添加扫描任务失败", e)
+            print("[*] 添加扫描任务失败\n", e)
     return scan_id_list
+
+
+def scan_exist_targets():
+    not_scan_target_list = []
+    try:
+        resp = requests.get(awvs_url + "/api/v1/targets",
+                            headers=headers,
+                            timeout=10,
+                            verify=False)
+        result = json.loads(resp.content.decode())
+        targets = result['targets']
+        for target in targets:
+            last_scan_id = target['last_scan_id']
+            target_id = target['target_id']
+            if last_scan_id == None:
+                not_scan_target_list.append(target_id)
+    except Exception as e:
+        print("获取未扫描的目标失败\n", e)
+
+    print("未扫描的目标数量为:", len(not_scan_target_list))
+    count = input("请输入要开始扫描的目标个数(留空则开始扫描所有未扫描目标):") or None
+    if count != None:
+        count = int(count)
+    target_id_list = not_scan_target_list[0:count]
+    try:
+        for target_id in target_id_list:
+            data = {
+                "target_id": target_id,
+                "profile_id": profile_id,
+                "incremental": False,
+                "schedule": {
+                    "disable": False,
+                    "start_date": None,
+                    "time_sensitive": False
+                }
+            }
+            add_resp = requests.post(awvs_url + "/api/v1/scans",
+                                     data=json.dumps(data),
+                                     headers=headers,
+                                     timeout=30,
+                                     verify=False)
+            if add_resp.status_code == 201:
+                try:
+                    r = requests.get(awvs_url +
+                                     "/api/v1/targets/{}".format(target_id),
+                                     headers=headers,
+                                     timeout=10,
+                                     verify=False)
+                    target_address = json.loads(r.content.decode())['address']
+                    print(target_address, " 添加扫描任务成功")
+                except Exception as e:
+                    print("获取目标url失败\n", e)
+    except Exception as e:
+        print("[*] 添加扫描任务失败\n", e)
 
 
 def get_scans():
@@ -195,21 +249,32 @@ def get_scans():
 
 
 def get_error_scans():
+    print("[*] 该操作会删除扫描器中扫描失败的目标，并将扫描失败的URL保存至log文件夹下")
+    confirm = input("[*] 是否要删除扫描器中扫描失败的目标(y/n)：")
+    if confirm != "y":
+        print("[*] 您已取消该操作")
+        sys.exit()
     scan_list = get_scans()['scans']
-    error_target_id_list = []
     try:
-        with open("./log/error_url.txt", 'w') as f:
+        with open("./log/error_url.txt", 'a') as f:
             for scan in scan_list:
                 if scan['current_session']['event_level'] == 2:
                     error_target_id = scan['target_id']
                     error_url = scan['target']['address']
-                    error_target_id_list.append(error_target_id)
                     f.write(error_url + '\n')
-                    print(error_url, " 扫描失败")
+                    try:
+                        resp = requests.delete(awvs_url + "/api/v1/targets/" +
+                                               error_target_id,
+                                               headers=headers,
+                                               timeout=30,
+                                               verify=False)
+                        if resp.status_code == 204:
+                            print(error_url, " 扫描失败，已从扫描器中删除目标")
+                    except Exception as e:
+                        print("[*] 删除目标时出现错误\n", e)
         print("\n[*] 扫描失败的URL已保存至log文件夹下的error_url.txt中")
     except Exception as e:
-        print("[*] 获取扫描失败的URL时出现错误", e)
-    return error_target_id_list
+        print("[*] 获取扫描失败的URL时出现错误\n", e)
 
 
 def abort_scans():
@@ -228,7 +293,7 @@ def abort_scans():
                 if resp.status_code == 204:
                     print(target_address, " 扫描任务已中止")
             except Exception as e:
-                print("[*] 中止扫描任务时出现错误", e)
+                print("[*] 中止扫描任务时出现错误\n", e)
 
 
 def del_targets():
@@ -257,30 +322,14 @@ def del_targets():
             except Exception as e:
                 print(target_address, e)
     except Exception as e:
-        print("[*] 删除目标时出现错误", e)
+        print("[*] 删除目标时出现错误\n", e)
 
 
 def rescan_error_scans():
-    print("[*] 该操作会先删除扫描器中扫描失败的目标，请先执行【获取扫描失败的目标】")
-    confirm = input("[*] 是否要删除扫描器中扫描失败的目标(y/n)：")
+    confirm = input("[*] 是否已经执行【获取扫描失败的目标】(y/n)：")
     if confirm != "y":
-        print("请先执行【获取扫描失败的目标】")
+        print("[*] 请先执行【获取扫描失败的目标】")
         sys.exit()
-    scan_list = get_scans()['scans']
-    for scan in scan_list:
-        if scan['current_session']['event_level'] == 2:
-            error_target_id = scan['target_id']
-            error_url = scan['target']['address']
-            try:
-                resp = requests.delete(awvs_url + "/api/v1/targets/" +
-                                       error_target_id,
-                                       headers=headers,
-                                       timeout=30,
-                                       verify=False)
-                if resp.status_code == 204:
-                    print(error_url, " 删除目标成功")
-            except Exception as e:
-                print("[*] 删除目标时出现错误:", e)
     print("\n[*] 正在尝试对扫描失败的目标进行重新扫描")
     scan_targets(txt="./log/error_url.txt", add_log="./log/readd_log.txt")
 
@@ -292,10 +341,11 @@ if __name__ == '__main__':
     help = """[*] 请选择要进行的操作：
 1、批量添加目标，不进行扫描
 2、批量添加目标并开始扫描
-3、获取扫描失败的目标
+3、对扫描器内已有目标进行扫描
 4、中止所有扫描任务
-5、删除所有目标和扫描任务
+5、获取扫描失败的目标
 6、对扫描失败的目标重新扫描
+7、删除所有目标和扫描任务
 """
 
     print(help)
@@ -308,16 +358,19 @@ if __name__ == '__main__':
         scan_targets()
 
     elif selection == "3":
-        get_error_scans()
+        scan_exist_targets()
 
     elif selection == "4":
         abort_scans()
 
     elif selection == "5":
-        del_targets()
+        get_error_scans()
 
     elif selection == "6":
         rescan_error_scans()
+
+    elif selection == "7":
+        del_targets()
 
     else:
         print("输入的内容有误")
