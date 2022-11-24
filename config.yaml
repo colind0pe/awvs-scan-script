@@ -10,6 +10,10 @@ scan_label: 脚本批量添加
 scan_speed: fast
 # 是否启用代理
 proxy_enabled: True
+# 设置最大扫描数量
+max_scan_count: 10  # 仅监控模式下生效
+# 设置最大扫描时间(小时)
+max_scan_time: 2    # 仅监控模式下生效
 # 设置扫描类型（从profile_id中选择，将scan_mode后的数字替换即可）
 scan_mode: 2
 # 扫描类型

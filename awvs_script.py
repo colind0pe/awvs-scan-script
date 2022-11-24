@@ -1,6 +1,10 @@
 import json
 import os
 import sys
+import threading
+import time
+from datetime import datetime
+
 import requests
 import urllib3
 import yaml
@@ -9,6 +13,7 @@ urllib3.disable_warnings()
 
 
 class Config:
+    # 从配置文件中读取配置
     try:
         with open('config.yaml', 'r', encoding='utf-8') as f:
             cfg = yaml.load(f, Loader=yaml.FullLoader)
@@ -20,9 +25,12 @@ class Config:
         scan_speed = cfg['scan_speed']
         proxy_enabled = cfg['proxy_enabled']
         profile_id = cfg['profile_id'][cfg['scan_mode']]
+        max_scan_count = cfg['max_scan_count']
+        max_scan_time = cfg['max_scan_time']
     except Exception as e:
         print("读取配置文件出错，请检查配置是否规范")
 
+    # 验证AWVS地址和API Token
     def check_api(self):
         try:
             resp = requests.get(self.awvs_url + '/api/v1/me/stats',
@@ -36,11 +44,13 @@ class Config:
             scans_running_count, scans_waiting_count = \
                 result['scans_running_count'], result['scans_waiting_count']
             vuln_count = result['vuln_count']
+            # 输出扫描基本信息
             print("正在扫描:", scans_running_count, "，等待扫描:", scans_waiting_count,
                   "，漏洞数量:", vuln_count)
         except Exception as e:
             print('初始化失败，请检查您设置的awvs_url是否正确\n', e)
             sys.exit()
+        return scans_running_count
 
 
 class Proxy:
@@ -48,9 +58,10 @@ class Proxy:
     def __init__(self):
         self.cfg = Config()
 
+    # 获取代理（如果proxy_enabled选项为False不进行抓取）
     def get_proxy(self):
         if not self.cfg.proxy_enabled:
-            return "127.0.0.1", 1080
+            return "127.0.0.1", 8111
         while 1:
             try:
                 proxy_str = requests.get(
@@ -60,6 +71,7 @@ class Proxy:
                 proxy_ip = proxy_list['Ip']
                 proxy_port = proxy_list['Port']
                 anonymity = proxy_list['Anonymity']
+                # 去掉透明代理
                 if anonymity != "透明":
                     break
             except Exception as e:
@@ -69,7 +81,7 @@ class Proxy:
 
 
 class GetUrl:
-
+    # 从url文件中读取url（url.txt或者./log/error_url.txt）
     @staticmethod
     def get_url_from_txt(count, txt, add_log):
         try:
@@ -78,11 +90,13 @@ class GetUrl:
                 print("[*] {}中没有url，请将待检测的url写入txt文件".format(txt))
                 sys.exit()
 
+            # 把添加成功的url写入add_log.txt或者readd_log.txt
             with open(txt, 'r') as f:
                 for url in f.readlines()[0:count]:
                     with open(add_log, 'a') as log:
                         log.write(url)
 
+                    # url预处理
                     if 'http' not in url[0:7]:
                         url = "http://" + url
                     url = url.strip().rstrip('/')
@@ -98,6 +112,7 @@ class Target:
     def __init__(self):
         self.cfg = Config()
 
+    # 根据target_id获取单个目标的信息
     def get_target(self, target_id):
         try:
             r = requests.get(self.cfg.awvs_url +
@@ -110,6 +125,7 @@ class Target:
         except Exception as e:
             print("获取目标失败\n", e)
 
+    # 获取扫描器中的所有目标的信息
     def get_targets(self):
         try:
             resp = requests.get(self.cfg.awvs_url + "/api/v1/targets",
@@ -121,6 +137,7 @@ class Target:
         except Exception as e:
             print("获取目标失败\n", e)
 
+    # 批量添加目标到扫描器，并会从url文件中删除已经添加成功的url
     def add_targets(self, txt, add_log):
         count = input("[*] 请输入要添加的目标数量(留空则添加{}中全部url)：".format(txt)) or None
         if count is not None:
@@ -151,6 +168,7 @@ class Target:
                 flag = False
                 print("[*] 添加目标失败\n", e)
 
+        # 从存放url的文件中删除已经添加成功的url
         if flag:
             try:
                 with open(txt, 'r') as f_r:
@@ -164,10 +182,11 @@ class Target:
         self.configuration(target_id_list, self.cfg.profile_id)
         return target_id_list
 
+    # 配置已添加到扫描器的目标的扫描参数，添加目标时会调用该方法
     def configuration(self, target_id_list, default_scanning_profile_id):
         for target_id in target_id_list:
             configuration_url = self.cfg.awvs_url + \
-                "/api/v1/targets/{}/configuration".format(target_id)
+                                "/api/v1/targets/{}/configuration".format(target_id)
 
             proxy_ip, proxy_port = Proxy().get_proxy()
             try:
@@ -189,6 +208,7 @@ class Target:
             except Exception as e:
                 print(e)
 
+    # 根据传入的target_id批量删除目标
     def del_target(self, target_id, target_address):
         try:
             r = requests.delete(self.cfg.awvs_url + "/api/v1/targets/" +
@@ -200,6 +220,7 @@ class Target:
         except Exception as e:
             print("删除目标{}时发送错误\n".format(target_address), e)
 
+    # 删除扫描器中的所有目标，同时会删除扫描任务
     def del_targets(self):
         targets_info = self.get_targets()
         targets_count = targets_info['pagination']['count']
@@ -220,6 +241,7 @@ class Scan:
     def __init__(self):
         self.cfg = Config()
 
+    # 根据传入的target_id批量添加扫描任务
     def scan_targets(self, target_id_list):
         for target_id in target_id_list:
             data = {
@@ -245,6 +267,7 @@ class Scan:
             except Exception as e:
                 print("[*] 添加扫描任务失败\n", e)
 
+    # 对扫描器内已有的目标进行扫描，同样可以控制扫描的数量
     def scan_exist_targets(self):
         not_scan_target_list = []
         targets_info = Target().get_targets()
@@ -261,6 +284,7 @@ class Scan:
         target_id_list = not_scan_target_list[0:count]
         self.scan_targets(target_id_list)
 
+    # 获取扫描器内所有扫描任务的信息
     def get_scans(self):
         try:
             resp = requests.get(self.cfg.awvs_url + "/api/v1/scans",
@@ -272,6 +296,7 @@ class Scan:
         except Exception as e:
             print(e)
 
+    # 中止扫描器内所有正在扫描的任务
     def abort_scans(self):
         scan_list = self.get_scans()['scans']
         for scan in scan_list:
@@ -291,6 +316,7 @@ class Scan:
                 except Exception as e:
                     print("[*] 中止扫描任务时出现错误\n", e)
 
+    # 获取扫描器内扫描失败的url，保存到'./log/error_url.txt中'，同时会删除扫描器内扫描失败的url
     def get_error_scans(self):
         print("[*] 该操作会删除扫描器中扫描失败的目标，并将扫描失败的URL保存至log文件夹下")
         confirm = input("[*] 是否要删除扫描器中扫描失败的目标(y/n)：")
@@ -305,6 +331,7 @@ class Scan:
                         error_target_id = scan['target_id']
                         error_url = scan['target']['address']
                         f.write(error_url + '\n')
+                        # 删除扫描器中扫描失败的url
                         status_code = Target().del_target(
                             error_target_id, error_url)
                         if status_code == 204:
@@ -313,6 +340,7 @@ class Scan:
         except Exception as e:
             print("[*] 获取扫描失败的URL时出现错误\n", e)
 
+    # 将‘./log/error_url.txt’中的url重新添加到扫描器并开始扫描，同样可以控制扫描的数量
     def rescan_error_scans(self):
         confirm = input("[*] 是否已经执行【获取扫描失败的目标】(y/n)：")
         if confirm != "y":
@@ -323,8 +351,74 @@ class Scan:
                                                add_log="./log/readd_log.txt"))
 
 
-if __name__ == '__main__':
+class Monitor:
 
+    def __init__(self):
+        self.cfg = Config()
+
+    # 根据传入的scan_id中止扫描任务
+    def abort_scans(self, scan_dict):
+        for key in scan_dict:
+            try:
+                resp = requests.post(self.cfg.awvs_url +
+                                     "/api/v1/scans/{}/abort".format(key),
+                                     headers=self.cfg.headers,
+                                     timeout=30,
+                                     verify=False)
+                if resp.status_code == 204:
+                    print("\n", scan_dict[key], " 扫描任务超过两小时，已中止扫描任务\n")
+            except Exception as e:
+                print("[*] 中止扫描任务时出现错误\n", e)
+
+    # 将扫描器中已有的目标添加到扫描任务
+    def add_scans(self, count):
+        not_scan_target_list = []
+        targets_info = Target().get_targets()
+        targets = targets_info['targets']
+        for target in targets:
+            last_scan_id = target['last_scan_id']
+            target_id = target['target_id']
+            if last_scan_id is None:
+                not_scan_target_list.append(target_id)
+        print("未扫描的目标数量为:", len(not_scan_target_list))
+        target_id_list = not_scan_target_list[0:count]
+        if len(not_scan_target_list) > 0:
+            Scan().scan_targets(target_id_list)
+        return target_id_list
+
+    # 对比所有正在扫描的任务的开始时间和当前时间，返回超过最大扫描时间的scan_id
+    def time_diff(self):
+        scans = Scan().get_scans()['scans']
+        scan_dict = {}
+        for scan in scans:
+            try:
+                status = scan['current_session']['status']
+                scan_id = scan['scan_id']
+                target_address = scan['target']['address']
+                if status == 'processing':
+                    start_time = scan['current_session']['start_date'][0:-6]
+                    UTC_FORMAT = '%Y-%m-%dT%H:%M:%S.%f'
+                    start_time = datetime.strptime(start_time, UTC_FORMAT)
+                    now_time = datetime.now()
+                    is_time_out = int(
+                        str(now_time - start_time).split(":")
+                        [0]) > self.cfg.max_scan_time - 1
+                    if is_time_out is True:
+                        scan_dict[scan_id] = target_address
+            except Exception as e:
+                print("获取时间差失败", e)
+        return scan_dict
+
+    # 检查当前正在进行的扫描任务的数量，未达到最大扫描任务数量时，向扫描器中添加扫描任务
+    def add_to_limit(self):
+        count = Config().check_api()
+        if count < self.cfg.max_scan_count:
+            diff_count = self.cfg.max_scan_count - count
+            target_id_list = Monitor().add_scans(diff_count)
+            print("[*] 已向扫描器添加{}个扫描任务\n".format(len(target_id_list)))
+
+
+def main():
     Config().check_api()
 
     usage = """[*] 请选择要进行的操作：
@@ -364,3 +458,47 @@ if __name__ == '__main__':
 
     else:
         print("输入的内容有误")
+
+
+# 监控是否有超过最大扫描时间的任务
+def monitor_time():
+    try:
+        while 1:
+            time.sleep(600)
+            scan_dict = Monitor().time_diff()
+            if len(scan_dict) != 0:
+                Monitor().abort_scans(scan_dict)
+    except KeyboardInterrupt:
+        print("\nApplication exit!")
+
+
+# 监控是否达到最大扫描任务数量，未达到则向扫描器添加扫描任务
+def monitor_count():
+    try:
+        while 1:
+            Monitor().add_to_limit()
+            time.sleep(180)
+    except KeyboardInterrupt:
+        print("\nApplication exit!")
+
+
+if __name__ == '__main__':
+    try:
+        if len(sys.argv) == 1:
+            main()
+        elif len(sys.argv) == 2 and sys.argv[1] == 'monitor':
+            threads = []
+            t1 = threading.Thread(target=monitor_time)
+            t2 = threading.Thread(target=monitor_count)
+            threads.append(t1)
+            threads.append(t2)
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
+        else:
+            print("""1、执行python3 awvs_script.py使用基本模式
+2、执行python3 awvs_script.py monitor使用监控模式（Linux可执行"nohup python3 -u awvs_script.py monitor &"让脚本后台运行）"""
+                  )
+    except Exception as e:
+        print(e)
