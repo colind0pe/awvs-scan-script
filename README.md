@@ -2,17 +2,18 @@
 
 ## 脚本介绍
 
-调用Acunetix AWVS的API实现批量扫描，并且使用代理池（项目地址[goProxyPool](https://github.com/pingc0y/go_proxy_pool)），实现批量扫描时的每个扫描目标都使用不同的代理IP。
+调用Acunetix AWVS的API实现批量扫描，并且使用代理池（项目地址[goProxyPool](https://github.com/pingc0y/go_proxy_pool)），实现批量扫描时的每个扫描目标都使用不同的代理IP。提供常驻后台监控功能，控制最大扫描任务数量以及最大扫描时间。
 
 ## 脚本功能
 
-* 仅批量添加目标，并设置扫描使用的代理，不进行扫描
-* 批量添加目标，并使用代理开始扫描
+* 仅批量添加目标（可设置添加数量），并设置扫描使用的代理，不进行扫描（会同时删除存放URL的文件中已经成功添加到扫描器的URL，并记录到log文件夹下）
+* 批量添加目标（可设置添加数量），并使用代理开始扫描（会同时删除存放URL的文件中已经成功添加到扫描器的URL，并记录到log文件夹下）
 * 对扫描器内已有目标进行扫描
 * 中止所有扫描任务
 * 获取扫描失败的目标，删除扫描器中扫描失败的目标，同时将扫描失败的URL保存在`log/error_url.txt`中
 * 删除扫描器中的所有扫描任务和目标
 * 对扫描失败的目标重新扫描，即将保存在`log/error_url.txt`中的URL重新添加到扫描器并开始扫描。执行该操作前请先执行【获取扫描失败的目标】。
+* **新增常驻后台监控功能，控制最大扫描任务数量以及最大扫描时间：脚本定时检查扫描器中正在进行的扫描任务，若未达到最大扫描任务数量，会自动添加扫描任务；同时会定时检查是否有扫描任务的扫描时间超过最大扫描时间，脚本会自动中止超过最大扫描时间的任务。**
 
 ```
 正在扫描: 0 ，等待扫描: 0 ，漏洞数量: {'high': None, 'low': None, 'med': None}
@@ -46,8 +47,9 @@
 
 ## 使用方法
 
-1、启动proxy_pool目录下的代理池程序，程序会开始爬取免费代理并验证代理，大约需要三分钟。代理池程序的详细使用请访问原项目仓库：[goProxyPool](https://github.com/pingc0y/go_proxy_pool)。感谢作者[pingc0y](https://github.com/pingc0y)的贡献。
+1. 启动proxy_pool目录下的代理池程序，程序会开始爬取免费代理并验证代理，大约需要三分钟。代理池程序的详细使用请访问原项目仓库：[goProxyPool](https://github.com/pingc0y/go_proxy_pool)。感谢作者[pingc0y](https://github.com/pingc0y)的贡献。
 
-2、在config.yaml配置文件中替换proxy_pool、awvs_url、api_key为你的代理池、awvs访问地址和API 密钥，同时可以选择修改标签和扫描速度以及扫描的类型。
+2. 在config.yaml配置文件中替换proxy_pool、awvs_url、api_key为你的代理池、awvs访问地址和API 密钥，同时可以选择修改标签和扫描速度以及扫描的类型。**新增最大扫描数量和最大扫描时间配置项。**
 
-3、使用python3运行脚本。
+3. * 基本模式：执行`python3 awvs_script.py`使用基本模式
+   * 监控模式：执行`python3 awvs_script.py monitor`使用监控模式（Linux可执行`nohup python3 -u awvs_script.py monitor &`让脚本后台运行）
